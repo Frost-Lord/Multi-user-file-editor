@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class FileEditorPanel extends JPanel implements Runnable {
 
@@ -74,7 +75,7 @@ public class FileEditorPanel extends JPanel implements Runnable {
     private class SharedClient implements Runnable {
         private Timer timer = new Timer();
         private long lastUpdate = System.currentTimeMillis();
-    
+
         public void run() {
             try {
                 Socket socket = null;
@@ -93,11 +94,13 @@ public class FileEditorPanel extends JPanel implements Runnable {
                     out.println("UPDATE," + i + "," + (i + 1));
                     out.println(lines[i]);
                 }
-        
+
                 new Thread(() -> {
                     try {
+                        AtomicReference<String> lineRef = new AtomicReference<>("");
                         String line;
                         while ((line = in.readLine()) != null) {
+                            lineRef.set(line);
                             if (line.startsWith("UPDATE")) {
                                 String[] updateInfo = line.split(",");
                                 int startLine = Integer.parseInt(updateInfo[1]);
@@ -108,7 +111,7 @@ public class FileEditorPanel extends JPanel implements Runnable {
                                 textArea.replaceRange(updatedLine, startOffset, endOffset);
                             } else {
                                 SwingUtilities.invokeLater(() -> {
-                                    textArea.append(line + "\n");
+                                    textArea.append(lineRef.get() + "\n");
                                 });
                             }
                         }
@@ -116,7 +119,7 @@ public class FileEditorPanel extends JPanel implements Runnable {
                         e.printStackTrace();
                     }
                 }).start();
-    
+
                 // Start timer to send updates to server
                 timer.schedule(new TimerTask() {
                     @Override
@@ -147,5 +150,5 @@ public class FileEditorPanel extends JPanel implements Runnable {
             }
         }
     }
-    
-}    
+
+}
