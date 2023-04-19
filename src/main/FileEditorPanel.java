@@ -82,30 +82,37 @@ public class FileEditorPanel extends JPanel implements Runnable {
                     try {
                         socket = new Socket("localhost", 9000);
                     } catch (ConnectException e) {
-                        // Server not running, start a new one
                         new Thread(new Server(textArea)).start();
-                        Thread.sleep(500); // Wait for server to start
+                        Thread.sleep(500);
                     }
                 }
                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-                int numLines = Integer.parseInt(in.readLine());
                 String[] lines = textArea.getText().split("\n");
                 for (int i = 0; i < lines.length; i++) {
                     out.println("UPDATE," + i + "," + (i + 1));
                     out.println(lines[i]);
                 }
-    
+        
                 new Thread(() -> {
                     try {
                         String line;
                         while ((line = in.readLine()) != null) {
-                            String finalLine = line;
-                            SwingUtilities.invokeLater(() -> {
-                                textArea.append(finalLine + "\n");
-                            });
+                            if (line.startsWith("UPDATE")) {
+                                String[] updateInfo = line.split(",");
+                                int startLine = Integer.parseInt(updateInfo[1]);
+                                int endLine = Integer.parseInt(updateInfo[2]);
+                                String updatedLine = in.readLine();
+                                int startOffset = textArea.getLineStartOffset(startLine);
+                                int endOffset = textArea.getLineEndOffset(startLine);
+                                textArea.replaceRange(updatedLine, startOffset, endOffset);
+                            } else {
+                                SwingUtilities.invokeLater(() -> {
+                                    textArea.append(line + "\n");
+                                });
+                            }
                         }
-                    } catch (IOException e) {
+                    } catch (IOException | BadLocationException e) {
                         e.printStackTrace();
                     }
                 }).start();
