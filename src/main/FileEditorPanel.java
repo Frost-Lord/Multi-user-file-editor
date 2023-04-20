@@ -1,18 +1,22 @@
 package main;
 
+import java.util.Timer;
+import java.util.TimerTask;
 import javax.swing.*;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.text.BadLocationException;
 
 import java.awt.*;
 import java.io.*;
 import java.net.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
-public class FileEditorPanel extends JPanel implements Runnable {
+public class FileEditorPanel extends JPanel {
 
     private JTextArea textArea;
     private boolean isPrivateSession;
@@ -73,11 +77,11 @@ public class FileEditorPanel extends JPanel implements Runnable {
     }
 
     private class SharedClient implements Runnable {
-        private Timer timer = new Timer();
-        private long lastUpdate = System.currentTimeMillis();
-
+        private PrintWriter out;
         public void run() {
             try {
+                textArea.getDocument().addDocumentListener(new TextAreaDocumentListener());
+    
                 Socket socket = null;
                 while (socket == null) {
                     try {
@@ -88,66 +92,83 @@ public class FileEditorPanel extends JPanel implements Runnable {
                     }
                 }
                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-                String[] lines = textArea.getText().split("\n");
-                for (int i = 0; i < lines.length; i++) {
-                    out.println("UPDATE," + i + "," + (i + 1));
-                    out.println(lines[i]);
-                }
-
+                out = new PrintWriter(socket.getOutputStream(), true); 
+    
                 new Thread(() -> {
                     try {
-                        AtomicReference<String> lineRef = new AtomicReference<>("");
                         String line;
                         while ((line = in.readLine()) != null) {
-                            lineRef.set(line);
                             if (line.startsWith("UPDATE")) {
                                 String[] updateInfo = line.split(",");
                                 int startLine = Integer.parseInt(updateInfo[1]);
-                                int endLine = Integer.parseInt(updateInfo[2]);
-                                String updatedLine = in.readLine();
-                                int startOffset = textArea.getLineStartOffset(startLine);
-                                int endOffset = textArea.getLineEndOffset(startLine);
-                                textArea.replaceRange(updatedLine, startOffset, endOffset);
-                            } else {
+                                boolean isInsert = Boolean.parseBoolean(updateInfo[2]);
+                                String updatedText = in.readLine();
                                 SwingUtilities.invokeLater(() -> {
-                                    textArea.append(lineRef.get() + "\n");
+                                    try {
+                                        int startOffset = textArea.getLineStartOffset(startLine);
+                                        int endOffset = isInsert ? startOffset : textArea.getLineEndOffset(startLine);
+                                        textArea.getDocument().removeDocumentListener(new TextAreaDocumentListener());
+                                        textArea.replaceRange(updatedText, startOffset, endOffset);
+                                        textArea.getDocument().addDocumentListener(new TextAreaDocumentListener());
+                                    } catch (BadLocationException e) {
+                                        e.printStackTrace();
+                                    }
                                 });
                             }
                         }
-                    } catch (IOException | BadLocationException e) {
+
+                    } catch (IOException e) {
                         e.printStackTrace();
                     }
                 }).start();
-
-                // Start timer to send updates to server
-                timer.schedule(new TimerTask() {
-                    @Override
-                    public void run() {
-                        try {
-                            String[] lines = textArea.getText().split("\n");
-                            List<Integer> modifiedLines = new ArrayList<>();
-                            for (int i = 0; i < lines.length; i++) {
-                                if (!lines[i].equals(textArea.getDocument().getText(textArea.getLineStartOffset(i),
-                                        textArea.getLineEndOffset(i) - textArea.getLineStartOffset(i)))) {
-                                    modifiedLines.add(i);
-                                    out.println("UPDATE," + i + "," + (i + 1));
-                                    out.println(lines[i]);
-                                }
-                            }
-                            if (!modifiedLines.isEmpty()) {
-                                lastUpdate = System.currentTimeMillis();
-                            } else if (System.currentTimeMillis() - lastUpdate > 1000) {
-                                out.println("PING");
-                            }
-                        } catch (BadLocationException e) {
-                            e.printStackTrace();
-                        }
-                    }
-                }, 1000, 1000);
             } catch (IOException | InterruptedException e) {
                 e.printStackTrace();
             }
+        }
+
+        private class TextAreaDocumentListener implements DocumentListener {
+
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                sendUpdate(e.getOffset(), e.getLength(), true);
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                sendUpdate(e.getOffset(), e.getLength(), false);
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+            }
+
+            private void sendUpdate(int offset, int length, boolean isInsert) {
+                try {
+                    int startLine = textArea.getLineOfOffset(offset);
+                    String updatedText = isInsert ? textArea.getDocument().getText(offset, length) : "";
+                    System.out.println("UPDATE," + startLine + "," + isInsert);
+                    System.out.println(updatedText);
+                    out.println("UPDATE," + startLine + "," + isInsert);
+                    out.println(updatedText);
+                } catch (BadLocationException e) {
+                    e.printStackTrace();
+                }
+            }
+
+        }
+
+    }
+
+    private class Server implements Runnable {
+        JTextArea textArea;
+
+        public Server(JTextArea textArea) {
+            this.textArea = textArea;
+        }
+
+        @Override
+        public void run() {
+            // Your Server implementation
         }
     }
 

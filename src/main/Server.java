@@ -4,11 +4,22 @@ import java.io.*;
 import java.net.*;
 import java.util.*;
 import javax.swing.JTextArea;
+import javax.swing.text.BadLocationException;
 
 public class Server implements Runnable {
 
-    private Map<Socket, List<Integer>> modifiedLines = new HashMap<>();
-    private JTextArea textArea;
+    private final Map<Socket, ClientData> clients = Collections.synchronizedMap(new HashMap<>());
+    private final JTextArea textArea;
+
+    private static class ClientData {
+        private PrintWriter out;
+        private List<Integer> modifiedLines;
+    
+        public ClientData(PrintWriter out) {
+            this.out = out;
+            this.modifiedLines = new ArrayList<>();
+        }
+    }
 
     public Server(JTextArea textArea) {
         this.textArea = textArea;
@@ -28,9 +39,9 @@ public class Server implements Runnable {
             System.out.println("Server started on port " + serverSocket.getLocalPort());
             while (true) {
                 Socket clientSocket = serverSocket.accept();
-                modifiedLines.put(clientSocket, new ArrayList<>());
                 System.out.println("User " + clientSocket.getInetAddress().getHostAddress() + " has joined the session");
-                new Thread(new ClientHandler(clientSocket, textArea.getLineCount())).start();
+                clients.put(clientSocket, new ClientData(new PrintWriter(clientSocket.getOutputStream(), true)));
+                new Thread(new ClientHandler(clientSocket)).start();
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -38,52 +49,62 @@ public class Server implements Runnable {
     }
 
     private class ClientHandler implements Runnable {
-        private Socket clientSocket;
-        private int numLines;
+        private final Socket clientSocket;
+        private final PrintWriter out;
     
-        public ClientHandler(Socket clientSocket, int numLines) {
+        public ClientHandler(Socket clientSocket) throws IOException {
             this.clientSocket = clientSocket;
-            this.numLines = numLines;
+            ClientData clientData = clients.get(clientSocket);
+            this.out = clientData.out;
         }
     
         @Override
         public void run() {
             try {
                 BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-                PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
-                out.println(numLines);
-    
+        
                 String line;
                 while ((line = in.readLine()) != null) {
                     if (line.startsWith("UPDATE")) {
-                        int startLine = Integer.parseInt(line.split(",")[1]);
-                        int endLine = Integer.parseInt(line.split(",")[2]);
-                        String[] lines = textArea.getText().split("\n");
-                        StringBuilder sb = new StringBuilder();
-                        for (int i = startLine; i < endLine && i < lines.length; i++) {
-                            sb.append(lines[i]).append("\n");
-                        }
-                        out.println(sb.toString());
-                    } else if ("PING".equals(line)) {
-                        System.out.println("Received PING from " + clientSocket.getInetAddress().getHostAddress());
-                    } else {
-                        synchronized (textArea) {
-                            textArea.append(line + "\n");
-                            numLines++;
-                        }
-                        for (Socket client : modifiedLines.keySet()) {
-                            if (client != clientSocket) {
-                                PrintWriter out2 = new PrintWriter(client.getOutputStream(), true);
-                                out2.println(line);
+                        String[] updateInfo = line.split(",");
+                        System.out.println("Received UPDATE command: " + line); // Add this line to print the received UPDATE command
+                        if (updateInfo.length >= 4) {
+                            int startLine = Integer.parseInt(updateInfo[1]);
+                            int endLine = Integer.parseInt(updateInfo[2]);
+                            boolean isInsert = Boolean.parseBoolean(updateInfo[3]);
+                            String updatedText = in.readLine();
+        
+                            synchronized (textArea) {
+                                int startOffset = textArea.getLineStartOffset(startLine);
+                                int endOffset = isInsert ? startOffset : textArea.getLineEndOffset(endLine) - 1;
+                                textArea.replaceRange(updatedText, startOffset, endOffset);
                             }
+        
+                            synchronized (clients) {
+                                for (Map.Entry<Socket, ClientData> entry : clients.entrySet()) {
+                                    if (entry.getKey() != clientSocket) {
+                                        PrintWriter otherOut = entry.getValue().out;
+                                        otherOut.println(line);
+                                        otherOut.println(updatedText);
+                                    }
+                                }
+                            }
+                        } else {
+                            System.err.println("Invalid UPDATE command received.");
                         }
                     }
                 }
-                modifiedLines.remove(clientSocket);
-                System.out.println("User " + clientSocket.getInetAddress().getHostAddress() + " has left the session");
-            } catch (IOException e) {
+            } catch (IOException | BadLocationException e) {
                 e.printStackTrace();
+            } finally {
+                clients.remove(clientSocket);
+                System.out.println("User " + clientSocket.getInetAddress().getHostAddress() + " has left the session");
+                try {
+                    clientSocket.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
-        }
+        }        
     }    
 }
